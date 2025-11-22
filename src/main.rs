@@ -3,6 +3,8 @@ use std::fs;
 use tree_sitter::{Parser as TsParser, Language};
 extern crate tree_sitter_python;
 extern crate tree_sitter_rust;
+mod walker;
+use crate::walker::python_to_rust;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -30,13 +32,8 @@ fn main() {
             let root = tree.root_node();
             println!("// UN1C⓪ v0.1: Python → {} translation", args.to);
             println!("// Parsed {} nodes", root.child_count());
-            // Basic rewrite stub: def → fn (expand in next commit)
-            let rust_code = code
-                .replace("def ", "fn ")
-                .replace(": int) -> int:", "(n: i32) -> i32")
-                .replace("return ", "return ")
-                .replace("if ", "if ")
-                .replace("for ", "for ");
+
+            let rust_code = python_to_rust(&root, code.as_bytes());
             println!("{}", rust_code);
         }
         "rust" => {
