@@ -1,8 +1,7 @@
 use clap::Parser;
 use std::fs;
-use tree_sitter::{Parser as TsParser, Language};
+use tree_sitter::Parser as TsParser;
 extern crate tree_sitter_python;
-extern crate tree_sitter_rust;
 mod walker;
 use crate::walker::python_to_rust;
 
