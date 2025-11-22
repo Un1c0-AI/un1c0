@@ -24,8 +24,8 @@ fn main() {
     match args.from.as_str() {
         "python" => {
             let mut parser = TsParser::new();
-            let lang: Language = tree_sitter_python::language();
-            parser.set_language(&lang).expect("Failed to set language");
+            let language = tree_sitter_python::LANGUAGE;
+            parser.set_language(&language.into()).expect("Failed to set language");
             let tree = parser.parse(&code, None).expect("Parse failed");
             let root = tree.root_node();
             println!("// UN1C⓪ v0.1: Python → {} translation", args.to);
@@ -56,8 +56,8 @@ mod tests {
     fn test_basic_parse() {
         let code = "def add(a, b): return a + b";
         let mut parser = TsParser::new();
-        let lang: Language = tree_sitter_python::language();
-        parser.set_language(&lang).unwrap();
+        let language = tree_sitter_python::LANGUAGE;
+        parser.set_language(&language.into()).unwrap();
         let tree = parser.parse(code, None).unwrap();
         // We assert child_count >= 1 to be resilient across grammar differences
         assert!(tree.root_node().child_count() >= 1);
