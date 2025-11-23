@@ -5,7 +5,7 @@ import hashlib
 import uuid
 from dataclasses import dataclass, field
 from enum import IntFlag, auto
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, ClassVar
 from blake3 import blake3
 
 # ----------------------------------------------------------------------
@@ -44,51 +44,51 @@ class Tags:
 # ----------------------------------------------------------------------
 @dataclass(frozen=True)
 class Node:
-    id: uuid.UUID = field(default_factory=uuid.uuid4)
+    id: uuid.UUID = field(default_factory=uuid.uuid4, init=False)
     kind: str = field(init=False)
 
 @dataclass(frozen=True)
 class Lambda(Node):
-    kind: str = "λ"
+    kind: ClassVar[str] = "λ"
     params: Tuple[str, "Type"]
     body: "Expr"
     tags: Tags
 
 @dataclass(frozen=True)
 class Phi(Node):
-    kind: str = "Φ"
+    kind: ClassVar[str] = "Φ"
     incoming: List["Value"]
     tags: Tags
 
 @dataclass(frozen=True)
 class Sigma(Node):
-    kind: str = "Σ"
+    kind: ClassVar[str] = "Σ"
     effect: str          # "io", "mut", "throw", "async", "terminate"
     inner: "Expr"
     tags: Tags
 
 @dataclass(frozen=True)
 class Pi(Node):
-    kind: str = "Π"
+    kind: ClassVar[str] = "Π"
     regions: List["Expr"]
     tags: Tags
 
 @dataclass(frozen=True)
 class Gamma(Node):
-    kind: str = "Γ"
+    kind: ClassVar[str] = "Γ"
     proof: str           # Dafny/Z3 proof hash
     inner: "Expr"
     tags: Tags
 
 @dataclass(frozen=True)
 class Omega(Node):
-    kind: str = "Ω"
+    kind: ClassVar[str] = "Ω"
     obligation: str      # External proof obligation ID
     tags: Tags
 
 @dataclass(frozen=True)
 class Delta(Node):
-    kind: str = "Δ"
+    kind: ClassVar[str] = "Δ"
     build_trace: bytes   # Full replay log
     tags: Tags
 
