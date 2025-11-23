@@ -1,3 +1,26 @@
+# UN1C⓪ — Universal Executable Graph (UEG)
+
+Quick instructions to run the UEG v0.1 reference implementation included in this repository.
+
+Prerequisites
+- Python 3.10+ (3.12 used in dev container)
+- Install Python dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Run the UEG example
+
+```bash
+python3 ueg.py
+```
+
+This prints a semantic hash, a validation result (stubbed `True` currently), and the lowering stub output.
+
+Development notes
+- `ueg.py` is a compact, pure-Python reference implementation of the UEG v0.1 IR used by UN1C⓪.
+- The `requirements.txt` includes `blake3` for hashing. In CI or packaging, prefer pinning exact versions.
 # UN1C⓪: Universal Code Translator
 
 The end of programming languages. v0.1: Python ↔ Rust round-trip with 100% parse fidelity.
