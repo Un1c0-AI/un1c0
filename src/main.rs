@@ -29,11 +29,8 @@ fn main() {
             parser.set_language(&language.into()).expect("Failed to set language");
             let tree = parser.parse(&code, None).expect("Parse failed");
             let root = tree.root_node();
-            println!("// UN1C⓪ v0.1: Python → {} translation", args.to);
-            println!("// Parsed {} nodes", root.child_count());
-
             let rust_code = python_to_rust(&root, code.as_bytes());
-            println!("{}", rust_code);
+            print!("{}", rust_code);
         }
         "rust" => {
             // Stub for Rust → Python (round-trip later)

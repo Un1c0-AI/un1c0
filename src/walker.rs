@@ -110,8 +110,11 @@ pub fn python_to_rust(_root: &Node, source: &[u8]) -> String {
                             out.push_str(&format!("    for _ in {}..={} {{\n", a, b));
                             // expect next line to be tuple update like `a, b = b, a + b`
                             if i + 1 < body.len() && body[i + 1].contains('=') {
-                                let rhs = body[i + 1].split('=').nth(1).unwrap_or("").trim();
-                                out.push_str(&format!("        let temp = {};\n", rhs));
+                                let rhs_full = body[i + 1].split('=').nth(1).unwrap_or("").trim();
+                                let temp_expr = if rhs_full.contains(',') {
+                                    rhs_full.split(',').nth(1).unwrap_or(rhs_full).trim()
+                                } else { rhs_full };
+                                out.push_str(&format!("        let temp = {};\n", temp_expr));
                                 out.push_str("        a = b;\n");
                                 out.push_str("        b = temp;\n");
                                 i += 1; // skip tuple update
