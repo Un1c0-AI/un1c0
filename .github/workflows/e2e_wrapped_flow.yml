@@ -94,5 +94,3 @@ jobs:
         if: always()
         run: |
           docker compose -f vault/docker-compose.yml down --volumes --remove-orphans
-
-*** End Patch

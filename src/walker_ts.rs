@@ -145,7 +145,7 @@ fn find_jsx_element(node: &Node, source: &[u8]) -> String {
         if after_return.starts_with('(') {
             // Find matching closing paren
             let mut depth = 0;
-            let mut jsx_start = 1;
+            let jsx_start = 1;
             let mut jsx_end = after_return.len();
             
             for (i, ch) in after_return.chars().enumerate() {

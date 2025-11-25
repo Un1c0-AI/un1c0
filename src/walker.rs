@@ -46,6 +46,7 @@ pub fn lower_to_rust(ueg: &Ueg) -> String {
     out
 }
 
+#[allow(dead_code)]
 pub fn entropy_fingerprint(source: &str) -> f64 {
     let mut freqs: HashMap<char, usize> = HashMap::new();
     let chars: Vec<char> = source.chars().collect();
@@ -66,7 +67,7 @@ pub fn entropy_fingerprint(source: &str) -> f64 {
 
 pub fn python_to_rust(_root: &Node, source: &[u8]) -> String {
     // Reuse `python_to_ueg` so the builder is exercised and not unused.
-    let src = String::from_utf8_lossy(source).to_string();
+    let _src = String::from_utf8_lossy(source).to_string();
     // Entropy gate disabled for v0.2.0 - will be re-enabled with correct threshold
     // let f = entropy_fingerprint(&src);
     // let baseline = compute_minimal_baseline().unwrap_or(0.25_f64);
@@ -146,7 +147,7 @@ pub fn python_to_ueg(_root: &Node, source: &[u8]) -> Ueg {
             j += 1;
         }
         // Build a small AST fragment for emitters: JSON-like string with name, params, ret
-        let frag = {
+        let _frag = {
             let mut parts: Vec<String> = Vec::new();
             parts.push(format!("\"name\": \"{}\"", name));
             let ps = params.iter().map(|(n,t)| format!("{{\"n\":\"{}\",\"t\":\"{}\"}}", n, t)).collect::<Vec<_>>().join(",");
@@ -174,6 +175,7 @@ pub fn python_to_ueg(_root: &Node, source: &[u8]) -> Ueg {
 
 /// Compute a minimal baseline by scanning `examples/*.py` and returning the
 /// smallest entropy observed. Returns `None` on IO errors or if no examples.
+#[allow(dead_code)]
 fn compute_minimal_baseline() -> Option<f64> {
     use std::fs;
     use std::path::Path;

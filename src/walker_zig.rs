@@ -1,4 +1,4 @@
-use tree_sitter::{Node, Parser, Language};
+use tree_sitter::{Node, Parser};
 
 // Use tree_sitter_zig crate directly
 use tree_sitter_zig::LANGUAGE as ZIG_LANGUAGE;

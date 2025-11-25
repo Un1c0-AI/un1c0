@@ -270,7 +270,7 @@ fn map_swift_type_to_rust(swift_type: &str) -> String {
 
 fn extract_methods(node: &Node, source: &[u8], depth: usize) -> String {
     let mut result = String::new();
-    let indent = "    ".repeat(depth);
+    let _indent = "    ".repeat(depth);
     let mut cursor = node.walk();
     
     for child in node.children(&mut cursor) {

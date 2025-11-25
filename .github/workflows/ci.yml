@@ -45,7 +45,7 @@ jobs:
           # Symlink the zig binary into PATH
           sudo ln -sf /opt/${ARCH}-${Z}/zig /usr/local/bin/zig
           zig version
-      - name: Check & apply formatting: gofmt
+      - name: "Check & apply formatting: gofmt"
         env:
           GIT_AUTHOR_NAME: github-actions
           GIT_AUTHOR_EMAIL: actions@github.com
@@ -80,7 +80,7 @@ jobs:
           else
             echo "gofmt reports no changes.";
           fi
-      - name: Check & apply formatting: zig fmt
+      - name: "Check & apply formatting: zig fmt"
         env:
           GIT_AUTHOR_NAME: github-actions
           GIT_AUTHOR_EMAIL: actions@github.com
