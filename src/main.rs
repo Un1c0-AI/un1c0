@@ -7,10 +7,12 @@ mod walker;
 mod walker_go;
 mod walker_move;
 mod walker_ts;
+mod walker_swift;
 use crate::walker::python_to_rust;
 use crate::walker_go::go_to_ueg;
 use crate::walker_move::move_to_rust;
 use crate::walker_ts::typescript_to_swift;
+use crate::walker_swift::swift_to_rust_regex;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -122,6 +124,16 @@ fn main() {
                     print!("{}", swift_code);
                 }
                 _ => eprintln!("Unsupported target for TypeScript: {}", args.to),
+            }
+        }
+        "swift" => {
+            match args.to.as_str() {
+                "rust" => {
+                    // Swift → Rust (regex-based, tree-sitter-swift incompatible with tree-sitter 0.24)
+                    let rust_code = swift_to_rust_regex(&code);
+                    print!("{}", rust_code);
+                }
+                _ => eprintln!("Unsupported target for Swift: {}", args.to),
             }
         }
         "rust" => {
