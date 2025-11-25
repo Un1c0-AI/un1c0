@@ -6,9 +6,11 @@ extern crate tree_sitter_go;
 mod walker;
 mod walker_go;
 mod walker_move;
+mod walker_ts;
 use crate::walker::python_to_rust;
 use crate::walker_go::go_to_ueg;
 use crate::walker_move::move_to_rust;
+use crate::walker_ts::typescript_to_swift;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -104,6 +106,22 @@ fn main() {
                     print!("{}", rust_code);
                 }
                 _ => eprintln!("Unsupported target for Move: {}", args.to),
+            }
+        }
+        "typescript" | "ts" | "tsx" => {
+            match args.to.as_str() {
+                "swift" => {
+                    let mut parser = TsParser::new();
+                    let language = tree_sitter_typescript::LANGUAGE_TSX;
+                    parser.set_language(&language.into()).expect("Failed to set TypeScript language");
+                    let tree = parser.parse(&code, None).expect("TypeScript parse failed");
+                    let root = tree.root_node();
+                    
+                    // TypeScript/TSX → Swift/SwiftUI
+                    let swift_code = typescript_to_swift(&root, code.as_bytes());
+                    print!("{}", swift_code);
+                }
+                _ => eprintln!("Unsupported target for TypeScript: {}", args.to),
             }
         }
         "rust" => {

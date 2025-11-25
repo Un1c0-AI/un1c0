@@ -1,0 +1,1 @@
+rd_("ntree_sitter_go")

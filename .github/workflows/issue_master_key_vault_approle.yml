@@ -1,0 +1,147 @@
+name: Issue MASTER_KEY from Vault via AppRole (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ensure_key_exists:
+        description: 'If true, will create a MASTER_KEY in Vault when missing'
+        required: false
+        default: 'false'
+
+jobs:
+  issue-from-approle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl openssl gh || true
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.VAULT_ADDR }}" ] || [ -z "${{ secrets.VAULT_ROLE_ID }}" ] || [ -z "${{ secrets.VAULT_SECRET_ID }}" ]; then
+            echo "ERROR: Set repository secrets VAULT_ADDR, VAULT_ROLE_ID, and VAULT_SECRET_ID before running this workflow.";
+            exit 1;
+          fi
+
+      - name: Obtain wrapped secret token from admin service (preferred)
+        id: get_wrapped
+        env:
+          ADMIN_SERVICE_URL: ${{ secrets.ADMIN_SERVICE_URL || '' }}
+          ADMIN_SERVICE_CLIENT_CERT: ${{ secrets.ADMIN_SERVICE_CLIENT_CERT || '' }}
+          ADMIN_SERVICE_CLIENT_KEY: ${{ secrets.ADMIN_SERVICE_CLIENT_KEY || '' }}
+        run: |
+          set -eux
+          if [ -n "$ADMIN_SERVICE_URL" ]; then
+            echo "Requesting wrapped secret token from admin service at $ADMIN_SERVICE_URL"
+            if [ -n "$ADMIN_SERVICE_CLIENT_CERT" ] && [ -n "$ADMIN_SERVICE_CLIENT_KEY" ]; then
+              echo "$ADMIN_SERVICE_CLIENT_CERT" | base64 -d > /tmp/admin_client.crt
+              echo "$ADMIN_SERVICE_CLIENT_KEY" | base64 -d > /tmp/admin_client.key
+              chmod 600 /tmp/admin_client.key
+              RESP=$(curl -sS --cert /tmp/admin_client.crt --key /tmp/admin_client.key -X POST -H "Content-Type: application/json" -d '{"role":"master-key-approle","wrap_ttl":"60s"}' "$ADMIN_SERVICE_URL/issue-wrapped-secret-id")
+            else
+              echo "ADMIN_SERVICE_CLIENT_CERT/KEY not provided; cannot call admin service via mTLS; falling back.";
+              RESP='{}'
+            fi
+            WRAP_TOKEN=$(printf '%s' "$RESP" | jq -r '.wrap_token // empty' || true)
+            if [ -n "$WRAP_TOKEN" ]; then
+              echo "wrap_token obtained from admin service"
+              echo "WRAP_TOKEN=$WRAP_TOKEN" >> $GITHUB_OUTPUT
+            else
+              echo "No wrap_token obtained; falling back to VAULT_SECRET_ID repository secret"
+              echo "WRAP_TOKEN=" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ADMIN_SERVICE_URL not set; falling back to VAULT_SECRET_ID repository secret"
+            echo "WRAP_TOKEN=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Authenticate to Vault using AppRole (unwrap if wrapped)
+        id: vault_login
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+        run: |
+          set -eux
+          WRAP_TOKEN=$(cat $GITHUB_OUTPUT | sed -n 's/^WRAP_TOKEN=//p' || true)
+          if [ -n "$WRAP_TOKEN" ]; then
+            echo "Unwrapping wrap token via Vault"
+            # Unwrap to obtain the inner secret (secret_id)
+            UNWRAP_RESP=$(curl -sS -H "X-Vault-Token: $WRAP_TOKEN" "$VAULT_ADDR/v1/sys/wrapping/unwrap" || true)
+            SECRET_ID=$(printf '%s' "$UNWRAP_RESP" | jq -r '.data.secret_id // empty') || true
+            if [ -z "$SECRET_ID" ]; then
+              echo "Failed to unwrap token or missing secret_id"; echo "$UNWRAP_RESP"; exit 1
+            fi
+          else
+            echo "No wrap token provided; falling back to VAULT_SECRET_ID from repo secrets"
+            SECRET_ID="$VAULT_SECRET_ID"
+          fi
+
+          RESP=$(curl -sS -X POST -H "Content-Type: application/json" -d "{\"role_id\": \"$ROLE_ID\", \"secret_id\": \"$SECRET_ID\"}" "$VAULT_ADDR/v1/auth/approle/login")
+          TOKEN=$(printf '%s' "$RESP" | jq -r '.auth.client_token')
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Failed to obtain Vault token via AppRole login"; echo "$RESP"; exit 1
+          fi
+          echo "Obtained Vault token via AppRole (not printed)."
+          echo "TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Read MASTER_KEY from Vault
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          TOKEN: ${{ steps.authenticate.outputs.TOKEN || '' }}
+        run: |
+          # Use the AppRole token obtained above (re-run login to fetch token for simplicity)
+          RESP=$(curl -sS -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/kv/data/master_key" || true)
+          KEY=$(printf '%s' "$RESP" | jq -r '.data.data.key // empty') || true
+          if [ -n "$KEY" ]; then
+            echo "Found MASTER_KEY in Vault (not printed)."
+          else
+            if [ "${{ github.event.inputs.ensure_key_exists }}" != "true" ]; then
+              echo "MASTER_KEY not found in Vault and ensure_key_exists != true; exiting.";
+              exit 1
+            fi
+            echo "MASTER_KEY missing; creating a new one."
+            KEY=$(openssl rand -hex 32)
+            EXPIRY=$(date -u -d "+1 day" +"%Y-%m-%dT%H:%M:%SZ")
+            curl -sS -X POST -H "X-Vault-Token: $TOKEN" -H "Content-Type: application/json" \
+              -d "{\"data\":{\"key\":\"$KEY\",\"expiry\":\"$EXPIRY\"}}" \
+              "$VAULT_ADDR/v1/kv/data/master_key"
+            echo "Wrote MASTER_KEY to Vault (not printed)."
+          fi
+
+      - name: Authenticate gh CLI and set repository secret
+        env:
+          KEY_ADMIN_TOKEN: ${{ secrets.KEY_ADMIN_TOKEN }}
+          REPO: ${{ env.REPO }}
+          # re-run AppRole login to get token for reading (simple approach)
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+        run: |
+          set -eux
+          RESP=$(curl -sS -X POST -H "Content-Type: application/json" -d "{\"role_id\": \"$ROLE_ID\", \"secret_id\": \"$SECRET_ID\"}" "$VAULT_ADDR/v1/auth/approle/login")
+          TOKEN=$(printf '%s' "$RESP" | jq -r '.auth.client_token')
+          # Fetch key
+          RESP2=$(curl -sS -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/kv/data/master_key")
+          KEY=$(printf '%s' "$RESP2" | jq -r '.data.data.key // empty') || true
+          if [ -z "$KEY" ]; then
+            echo "Failed to read MASTER_KEY from Vault"; exit 1
+          fi
+          if [ -n "$KEY_ADMIN_TOKEN" ]; then
+            # Set repository secret using maintainer PAT
+            printf '%s' "$KEY_ADMIN_TOKEN" | gh auth login --with-token
+            gh secret set MASTER_KEY --body "$KEY" --repo "$REPO"
+            echo "MASTER_KEY written to repository secrets for $REPO (not printed)."
+          else
+            echo "KEY_ADMIN_TOKEN not provided; printing masked indication only.";
+            echo "MASTER_KEY available but not written to repo secrets (no KEY_ADMIN_TOKEN)."
+          fi

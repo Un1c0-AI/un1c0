@@ -1,0 +1,78 @@
+name: Issue MASTER_KEY from Vault (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_if_missing:
+        description: 'Create the key in Vault if it does not exist (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  issue-key-from-vault:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl openssl gh || true
+
+      - name: Validate inputs and secrets
+        run: |
+          if [ -z "${{ secrets.VAULT_ADDR }}" ] || [ -z "${{ secrets.VAULT_TOKEN }}" ]; then
+            echo "ERROR: Set repository secrets VAULT_ADDR and VAULT_TOKEN before running this workflow.";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.KEY_ADMIN_TOKEN }}" ]; then
+            echo "ERROR: Set repository secret KEY_ADMIN_TOKEN (PAT with repo admin scope) before running this workflow.";
+            exit 1;
+          fi
+
+      - name: Read (or create) MASTER_KEY in Vault
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          CREATE_IF_MISSING: ${{ github.event.inputs.create_if_missing }}
+        run: |
+          set -eux
+          # Try to read existing key
+          RESP=$(curl -sS -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/kv/data/master_key" || true)
+          KEY=$(printf '%s' "$RESP" | jq -r '.data.data.key // empty') || true
+          if [ -n "$KEY" ]; then
+            echo "Found existing MASTER_KEY in Vault (not printed)."
+          else
+            if [ "$CREATE_IF_MISSING" != "true" ]; then
+              echo "MASTER_KEY not found in Vault and create_if_missing != true; exiting.";
+              exit 1
+            fi
+            echo "MASTER_KEY missing; generating and storing a new key in Vault."
+            KEY=$(openssl rand -hex 32)
+            EXPIRY=$(date -u -d "+1 day" +"%Y-%m-%dT%H:%M:%SZ")
+            curl -sS -X POST -H "X-Vault-Token: $VAULT_TOKEN" -H "Content-Type: application/json" \
+              -d "{\"data\":{\"key\":\"$KEY\",\"expiry\":\"$EXPIRY\"}}" \
+              "$VAULT_ADDR/v1/kv/data/master_key"
+            echo "Wrote MASTER_KEY to Vault (not printed)."
+          fi
+
+      - name: Authenticate gh CLI and set repository secret
+        env:
+          KEY_ADMIN_TOKEN: ${{ secrets.KEY_ADMIN_TOKEN }}
+          REPO: ${{ env.REPO }}
+        run: |
+          # Login gh using admin PAT
+          printf '%s' "$KEY_ADMIN_TOKEN" | gh auth login --with-token
+          # Set the MASTER_KEY repository secret (do not print the value)
+          gh secret set MASTER_KEY --body "$KEY" --repo "$REPO"
+          echo "MASTER_KEY written to repository secrets for $REPO (not printed)."
+
+      - name: Final note
+        run: |
+          echo "Deliver the raw key securely to the requester out-of-band. This workflow masks values and does not echo the key.";

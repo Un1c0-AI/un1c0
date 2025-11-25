@@ -1,0 +1,47 @@
+name: Issue MASTER_KEY via GitHub OIDC (example)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  issue-via-oidc:
+    runs-on: ubuntu-latest
+    env:
+      VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+      VAULT_ROLE: github-oidc-role
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Request OIDC token
+        id: oidc
+        uses: actions/oidc-token@v1
+        with:
+          target_audience: 'api://GitHubActions'
+
+      - name: Login to Vault using JWT/OIDC
+        run: |
+          # This example assumes Vault is configured with a JWT auth method that accepts GitHub OIDC tokens
+          OIDC_TOKEN=${{ steps.oidc.outputs.value }}
+          RESP=$(curl -sS -X POST -H "Content-Type: application/json" -d "{\"role\": \"$VAULT_ROLE\", \"jwt\": \"$OIDC_TOKEN\"}" "$VAULT_ADDR/v1/auth/jwt/login")
+          TOKEN=$(printf '%s' "$RESP" | jq -r '.auth.client_token')
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Vault JWT login failed"; echo "$RESP"; exit 1
+          fi
+          echo "Logged into Vault via OIDC; token obtained"
+          # Read the master key and set repository secret (example)
+          RESP2=$(curl -sS -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/kv/data/master_key")
+          KEY=$(printf '%s' "$RESP2" | jq -r '.data.data.key // empty')
+          if [ -z "$KEY" ]; then
+            echo "MASTER_KEY missing or unreadable"; exit 1
+          fi
+          # Set the repository secret using gh CLI and a maintainer PAT
+          if [ -z "${{ secrets.KEY_ADMIN_TOKEN }}" ]; then
+            echo "KEY_ADMIN_TOKEN not configured in repo secrets; skipping setting repo secret"; exit 0
+          fi
+          printf '%s' "${{ secrets.KEY_ADMIN_TOKEN }}" | gh auth login --with-token
+          gh secret set MASTER_KEY --body "$KEY" --repo "${{ github.repository }}"

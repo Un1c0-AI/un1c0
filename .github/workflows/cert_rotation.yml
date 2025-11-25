@@ -1,0 +1,130 @@
+name: Certificate Rotation
+
+on:
+  schedule:
+    # Run monthly on the 1st at 2 AM UTC
+    - cron: '0 2 1 * *'
+  workflow_dispatch:
+    inputs:
+      force_rotation:
+        description: 'Force certificate rotation even if not near expiry'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+  secrets: write
+
+jobs:
+  check-cert-expiry:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_rotation: ${{ steps.check.outputs.needs_rotation }}
+      days_until_expiry: ${{ steps.check.outputs.days_until_expiry }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Decode current client certificate
+        id: decode
+        run: |
+          if [ -n "${{ secrets.CLIENT_CERT_BASE64 }}" ]; then
+            echo "${{ secrets.CLIENT_CERT_BASE64 }}" | base64 -d > /tmp/client.crt
+            echo "has_cert=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_cert=false" >> $GITHUB_OUTPUT
+            echo "::warning::No CLIENT_CERT_BASE64 secret found"
+          fi
+
+      - name: Check certificate expiration
+        id: check
+        run: |
+          if [ "${{ steps.decode.outputs.has_cert }}" = "true" ]; then
+            # Get expiry date
+            expiry_date=$(openssl x509 -in /tmp/client.crt -noout -enddate | cut -d= -f2)
+            expiry_epoch=$(date -d "$expiry_date" +%s)
+            now_epoch=$(date +%s)
+            days_until_expiry=$(( ($expiry_epoch - $now_epoch) / 86400 ))
+            
+            echo "days_until_expiry=$days_until_expiry" >> $GITHUB_OUTPUT
+            echo "Certificate expires in $days_until_expiry days"
+            
+            # Rotate if less than 30 days or force requested
+            if [ "$days_until_expiry" -lt 30 ] || [ "${{ inputs.force_rotation }}" = "true" ]; then
+              echo "needs_rotation=true" >> $GITHUB_OUTPUT
+              echo "::warning::Certificate needs rotation (expires in $days_until_expiry days)"
+            else
+              echo "needs_rotation=false" >> $GITHUB_OUTPUT
+              echo "Certificate is still valid for $days_until_expiry days"
+            fi
+          else
+            # No cert exists, needs creation
+            echo "needs_rotation=true" >> $GITHUB_OUTPUT
+            echo "days_until_expiry=0" >> $GITHUB_OUTPUT
+          fi
+
+  rotate-certificates:
+    needs: check-cert-expiry
+    if: needs.check-cert-expiry.outputs.needs_rotation == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate new certificates
+        run: |
+          cd vault
+          ./generate_certs.sh
+          
+      - name: Encode certificates to base64
+        id: encode
+        run: |
+          CLIENT_CERT_B64=$(base64 -w0 vault/certs/client.crt)
+          CLIENT_KEY_B64=$(base64 -w0 vault/certs/client.key)
+          
+          # Save to GitHub output (not visible in logs)
+          echo "client_cert_b64<<EOF" >> $GITHUB_OUTPUT
+          echo "$CLIENT_CERT_B64" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "client_key_b64<<EOF" >> $GITHUB_OUTPUT
+          echo "$CLIENT_KEY_B64" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "New certificates generated and encoded"
+
+      - name: Update repository secrets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Update CLIENT_CERT_BASE64
+          gh secret set CLIENT_CERT_BASE64 --body "${{ steps.encode.outputs.client_cert_b64 }}"
+          
+          # Update CLIENT_KEY_BASE64
+          gh secret set CLIENT_KEY_BASE64 --body "${{ steps.encode.outputs.client_key_b64 }}"
+          
+          echo "✅ Repository secrets updated successfully"
+
+      - name: Verify new certificates
+        run: |
+          echo "Verifying certificate update..."
+          echo "${{ steps.encode.outputs.client_cert_b64 }}" | base64 -d > /tmp/new_cert.crt
+          
+          # Check it's valid
+          openssl x509 -in /tmp/new_cert.crt -noout -text | grep "Not After"
+          
+          # Get new expiry
+          expiry_date=$(openssl x509 -in /tmp/new_cert.crt -noout -enddate | cut -d= -f2)
+          echo "✅ New certificate expires: $expiry_date"
+
+      - name: Notify on rotation
+        if: success()
+        run: |
+          echo "::notice::Client certificates rotated successfully. New expiry: $(openssl x509 -in /tmp/new_cert.crt -noout -enddate | cut -d= -f2)"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Certificate rotation failed. Manual intervention required."

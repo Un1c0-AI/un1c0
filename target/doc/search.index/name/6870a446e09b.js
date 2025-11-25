@@ -1,0 +1,1 @@
+rd_("hLANGUAGEireferencejLanguageFnjNODE_TYPESjTAGS_QUERYntree_sitter_goA`HIGHLIGHTS_QUERY")

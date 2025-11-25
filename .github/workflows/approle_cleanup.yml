@@ -1,0 +1,59 @@
+name: AppRole Cleanup
+
+on:
+  schedule:
+    # Run daily at 3 AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      max_accessors:
+        description: 'Maximum number of accessors to keep'
+        required: false
+        default: '10'
+      max_events:
+        description: 'Maximum number of issuance events to keep'
+        required: false
+        default: '100'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start Vault stack
+        run: |
+          cd vault
+          docker compose up -d vault
+          
+      - name: Wait for Vault to be ready
+        run: |
+          timeout 30 bash -c 'until curl -sf http://127.0.0.1:8200/v1/sys/health; do sleep 1; done'
+          echo "Vault is ready"
+
+      - name: Initialize Vault
+        run: |
+          cd vault
+          ./init_vault.sh
+
+      - name: Run cleanup script
+        env:
+          VAULT_ADDR: http://127.0.0.1:8200
+          VAULT_TOKEN: root-token
+          MAX_ACCESSORS: ${{ inputs.max_accessors || '10' }}
+          MAX_EVENTS: ${{ inputs.max_events || '100' }}
+        run: |
+          cd vault
+          ./cleanup_accessors.sh
+
+      - name: Cleanup Docker
+        if: always()
+        run: |
+          cd vault
+          docker compose down --volumes --remove-orphans
+
+      - name: Report results
+        if: success()
+        run: |
+          echo "::notice::AppRole cleanup completed successfully"

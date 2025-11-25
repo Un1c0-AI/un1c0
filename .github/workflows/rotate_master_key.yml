@@ -1,0 +1,135 @@
+name: Master Key Rotation
+
+on:
+  schedule:
+    # Run quarterly on the 1st at 4 AM UTC
+    - cron: '0 4 1 */3 *'
+  workflow_dispatch:
+    inputs:
+      break_glass_token:
+        description: 'Break-glass token for authorization'
+        required: true
+        type: string
+      expiry_days:
+        description: 'Days until new key expires'
+        required: false
+        default: '90'
+
+jobs:
+  rotate-master-key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start Vault stack
+        run: |
+          cd vault
+          docker compose up -d
+          
+      - name: Wait for services to be ready
+        run: |
+          timeout 60 bash -c 'until curl -sf http://127.0.0.1:8200/v1/sys/health; do sleep 1; done'
+          timeout 30 bash -c 'until curl -sf http://127.0.0.1:5000/health; do sleep 1; done'
+          echo "All services ready"
+
+      - name: Initialize Vault
+        run: |
+          cd vault
+          ./init_vault.sh
+
+      - name: Provision client certificates
+        run: |
+          cd vault
+          if [ -n "${{ secrets.CLIENT_CERT_BASE64 }}" ]; then
+            echo "${{ secrets.CLIENT_CERT_BASE64 }}" | base64 -d > certs/client.crt
+            echo "${{ secrets.CLIENT_KEY_BASE64 }}" | base64 -d > certs/client.key
+          else
+            ./generate_certs.sh
+          fi
+
+      - name: Validate break-glass token
+        env:
+          BREAK_GLASS_TOKEN: ${{ inputs.break_glass_token }}
+        run: |
+          cd vault
+          # Verify break-glass token is valid
+          if ! ./check_breakglass.sh "$BREAK_GLASS_TOKEN"; then
+            echo "::error::Invalid break-glass token"
+            exit 1
+          fi
+          echo "✅ Break-glass token validated"
+
+      - name: Rotate master key
+        env:
+          EXPIRY_DAYS: ${{ inputs.expiry_days || '90' }}
+        run: |
+          cd vault
+          
+          # Calculate expiry timestamp
+          EXPIRY_DATE=$(date -u -d "+${EXPIRY_DAYS} days" +"%Y-%m-%dT%H:%M:%SZ")
+          
+          # Call admin service to rotate key (mTLS required)
+          RESPONSE=$(curl -k -s -w "\n%{http_code}" \
+            --cert certs/client.crt \
+            --key certs/client.key \
+            -H "Content-Type: application/json" \
+            -d "{\"expiry\":\"$EXPIRY_DATE\"}" \
+            -X POST https://localhost:8443/rotate-master-key)
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Master key rotation failed with HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+          
+          echo "✅ Master key rotated successfully"
+          echo "$BODY" | jq '.'
+          
+          # Extract new key (for logging purposes only - not exposed in logs)
+          NEW_KEY=$(curl -s \
+            -H "X-Vault-Token: root-token" \
+            http://127.0.0.1:8200/v1/kv/data/master_key | jq -r '.data.data.key')
+          
+          # Verify key was updated
+          if [ -z "$NEW_KEY" ] || [ "$NEW_KEY" = "null" ]; then
+            echo "::error::Failed to verify new master key"
+            exit 1
+          fi
+          
+          echo "::add-mask::$NEW_KEY"
+          echo "New master key length: ${#NEW_KEY}"
+
+      - name: Update MASTER_KEY secret
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch the new master key
+          NEW_KEY=$(curl -s \
+            -H "X-Vault-Token: root-token" \
+            http://127.0.0.1:8200/v1/kv/data/master_key | jq -r '.data.data.key')
+          
+          # Update repository secret
+          gh secret set MASTER_KEY --body "$NEW_KEY"
+          
+          echo "✅ MASTER_KEY secret updated in repository"
+
+      - name: Cleanup Docker
+        if: always()
+        run: |
+          cd vault
+          docker compose down --volumes --remove-orphans
+
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "::notice::Master key rotation completed successfully. New key set in repository secrets."
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Master key rotation failed. Manual intervention required."

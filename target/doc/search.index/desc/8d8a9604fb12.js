@@ -1,0 +1,1 @@
+rd_("CiThe tree-sitter <code>LanguageFn</code> for this grammar.DfThe content of the <code>node-types.json</code> file for this grammar.BkThe symbol tagging query for this language.CnThis crate provides Go language support for the tree-sitter\xe2\x80\xa6C`The syntax highlighting query for this language.")

@@ -1,0 +1,158 @@
+name: Example Gated CI
+
+# This workflow demonstrates how to gate CI jobs with the MASTER_KEY
+# The E2E Vault workflow must run first to populate the MASTER_KEY secret
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # Step 1: Ensure MASTER_KEY is available via the E2E Vault flow
+  provision-master-key:
+    uses: ./.github/workflows/e2e_wrapped_flow.yml
+    secrets: inherit
+
+  # Step 2: Example gated job - runs tests with access to MASTER_KEY
+  run-tests:
+    needs: provision-master-key
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify MASTER_KEY is available
+        run: |
+          if [ -z "${{ secrets.MASTER_KEY }}" ]; then
+            echo "::error::MASTER_KEY not available. E2E Vault flow may have failed."
+            exit 1
+          fi
+          echo "✅ MASTER_KEY is available"
+
+      - name: Use MASTER_KEY for sensitive operation
+        env:
+          MASTER_KEY: ${{ secrets.MASTER_KEY }}
+        run: |
+          # Example: Use master key to decrypt secrets, authenticate to services, etc.
+          echo "Master key length: ${#MASTER_KEY}"
+          echo "Master key (first 8 chars): ${MASTER_KEY:0:8}..."
+          
+          # Your actual test/deployment commands here
+          echo "Running tests with master key access..."
+
+  # Step 3: Example gated deployment job
+  deploy:
+    needs: run-tests
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify MASTER_KEY is available
+        run: |
+          if [ -z "${{ secrets.MASTER_KEY }}" ]; then
+            echo "::error::MASTER_KEY not available for deployment"
+            exit 1
+          fi
+          echo "✅ MASTER_KEY verified for deployment"
+
+      - name: Deploy with MASTER_KEY
+        env:
+          MASTER_KEY: ${{ secrets.MASTER_KEY }}
+        run: |
+          # Example: Use master key for deployment authentication
+          echo "Deploying application with master key..."
+          
+          # Your deployment commands here
+          echo "Deployment completed"
+
+  # Step 4: Example job using dynamic per-job secrets
+  dynamic-secret-example:
+    needs: provision-master-key
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start Vault stack
+        run: |
+          cd vault
+          docker compose up -d
+
+      - name: Wait for services
+        run: |
+          timeout 60 bash -c 'until curl -sf http://127.0.0.1:8200/v1/sys/health; do sleep 1; done'
+          timeout 30 bash -c 'until curl -sf http://127.0.0.1:5000/health; do sleep 1; done'
+
+      - name: Initialize Vault
+        run: |
+          cd vault
+          ./init_vault.sh
+
+      - name: Provision certificates
+        run: |
+          cd vault
+          if [ -n "${{ secrets.CLIENT_CERT_BASE64 }}" ]; then
+            echo "${{ secrets.CLIENT_CERT_BASE64 }}" | base64 -d > certs/client.crt
+            echo "${{ secrets.CLIENT_KEY_BASE64 }}" | base64 -d > certs/client.key
+          else
+            ./generate_certs.sh
+          fi
+
+      - name: Request job-specific secret
+        id: job_secret
+        run: |
+          cd vault
+          
+          # Request a job-specific wrapped secret
+          RESPONSE=$(curl -k -s \
+            --cert certs/client.crt \
+            --key certs/client.key \
+            -H "Content-Type: application/json" \
+            -d "{\"job_id\":\"${{ github.run_id }}-${{ github.job }}\"}" \
+            -X POST https://localhost:8443/issue-job-secret)
+          
+          echo "Response: $RESPONSE"
+          
+          WRAP_TOKEN=$(echo "$RESPONSE" | jq -r '.wrap_token')
+          
+          if [ -z "$WRAP_TOKEN" ] || [ "$WRAP_TOKEN" = "null" ]; then
+            echo "::error::Failed to obtain job-specific wrap token"
+            exit 1
+          fi
+          
+          echo "::add-mask::$WRAP_TOKEN"
+          echo "wrap_token=$WRAP_TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Unwrap and use job-specific secret
+        env:
+          WRAP_TOKEN: ${{ steps.job_secret.outputs.wrap_token }}
+        run: |
+          # Unwrap the token to get the actual secret_id
+          UNWRAPPED=$(curl -s \
+            -H "X-Vault-Token: $WRAP_TOKEN" \
+            -X POST http://127.0.0.1:8200/v1/sys/wrapping/unwrap)
+          
+          SECRET_ID=$(echo "$UNWRAPPED" | jq -r '.data.secret_id')
+          
+          if [ -z "$SECRET_ID" ] || [ "$SECRET_ID" = "null" ]; then
+            echo "::error::Failed to unwrap job-specific secret"
+            exit 1
+          fi
+          
+          echo "::add-mask::$SECRET_ID"
+          echo "✅ Job-specific secret obtained"
+          
+          # Use the secret_id to login to AppRole
+          # This secret is unique to this job and will be revoked after use
+          echo "Using job-specific secret for this workflow run only"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          cd vault
+          docker compose down --volumes --remove-orphans

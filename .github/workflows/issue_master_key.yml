@@ -1,0 +1,54 @@
+name: Issue MASTER_KEY (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expiry_days:
+        description: 'How many days the issued key should be valid (informational only)'
+        required: false
+        default: '1'
+
+jobs:
+  issue-key:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssl git curl gh || true
+
+      - name: Authenticate gh CLI
+        env:
+          KEY_ADMIN_TOKEN: ${{ secrets.KEY_ADMIN_TOKEN }}
+        run: |
+          if [ -z "${KEY_ADMIN_TOKEN:-}" ]; then
+            echo "ERROR: Set repository secret KEY_ADMIN_TOKEN (PAT with repo admin scope) before running this workflow.";
+            exit 1;
+          fi
+          # Login using token on stdin
+          printf '%s' "$KEY_ADMIN_TOKEN" | gh auth login --with-token
+
+      - name: Generate and set MASTER_KEY
+        env:
+          EXPIRY_DAYS: ${{ github.event.inputs.expiry_days }}
+          REPO: ${{ env.REPO }}
+        run: |
+          set -eux
+          # Generate a 32-byte (64 hex) secret
+          KEY=$(openssl rand -hex 32)
+          # Set repository secret (will overwrite existing MASTER_KEY)
+          gh secret set MASTER_KEY --body "$KEY" --repo "$REPO"
+          echo "MASTER_KEY set for $REPO"
+          echo "NOTE: this workflow does NOT print the raw key. Deliver the raw key securely to the requester out-of-band."
+
+      - name: Final note
+        run: |
+          echo "If you need to distribute the raw key to a requester, generate the key locally (use scripts/generate_master_key.sh) and deliver using a secure channel (PGP, vault, ephemeral link)."

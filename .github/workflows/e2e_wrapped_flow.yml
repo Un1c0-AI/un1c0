@@ -1,0 +1,98 @@
+name: E2E Wrapped Flow (ngrok)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ngrok_authtoken:
+        description: 'ngrok authtoken (set as secret NGROK_AUTHTOKEN instead)'
+        required: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      VAULT_ADDR: http://127.0.0.1:8200
+      ADMIN_API_KEY: local-secret
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Compose
+        run: |
+          docker compose -f vault/docker-compose.yml up --build -d
+
+      - name: Wait for services
+        run: |
+          # Wait for Vault and admin service
+          for i in {1..30}; do
+            if curl -sS http://127.0.0.1:8200/v1/sys/health >/dev/null 2>&1; then break; fi
+            echo "Waiting for Vault..."; sleep 2
+          done
+          for i in {1..30}; do
+            if curl -sS http://127.0.0.1:5000/health >/dev/null 2>&1; then break; fi
+            echo "Waiting for admin-service..."; sleep 2
+          done
+
+      - name: Initialize Vault (KV, policy, AppRole)
+        run: |
+          set -eux
+          ./vault/init_vault.sh
+
+      - name: Provision client certs (from secrets or generate)
+        run: |
+          set -eux
+          mkdir -p vault/certs
+          if [ -n "${{ secrets.CLIENT_CERT_BASE64 || '' }}" ] && [ -n "${{ secrets.CLIENT_KEY_BASE64 || '' }}" ]; then
+            echo "Writing client cert/key from secrets"
+            echo "${{ secrets.CLIENT_CERT_BASE64 }}" | base64 -d > vault/certs/client.crt
+            echo "${{ secrets.CLIENT_KEY_BASE64 }}" | base64 -d > vault/certs/client.key
+          else
+            echo "CLIENT certs not provided via secrets; generating local certs"
+            ./vault/generate_certs.sh
+          fi
+
+      - name: Request wrapped secret via local admin service (mTLS)
+        run: |
+          set -eux
+          # Use mTLS only; do not include any API-key header
+          RESP=$(curl -sS --cert vault/certs/client.crt --key vault/certs/client.key -k -X POST -H "Content-Type: application/json" -d '{"role":"master-key-approle","wrap_ttl":"60s"}' https://localhost:8443/issue-wrapped-secret-id)
+          echo "$RESP" | jq .
+          WRAP_TOKEN=$(echo "$RESP" | jq -r '.wrap_token // empty')
+          if [ -z "$WRAP_TOKEN" ]; then echo "No wrap_token returned"; exit 1; fi
+
+      - name: Unwrap token with local Vault
+        run: |
+          set -eux
+          # Use wrap token to unwrap
+          UNWRAP=$(curl -sS -H "X-Vault-Token: $WRAP_TOKEN" "$VAULT_ADDR/v1/sys/wrapping/unwrap")
+          echo "$UNWRAP" | jq .
+          SECRET_ID=$(echo "$UNWRAP" | jq -r '.data.secret_id // empty')
+          if [ -z "$SECRET_ID" ]; then echo "failed to unwrap secret_id"; exit 1; fi
+          echo "Obtained SECRET_ID from unwrap"
+
+      - name: Login via AppRole with secret_id and fetch MASTER_KEY
+        env:
+          VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          KEY_ADMIN_TOKEN: ${{ secrets.KEY_ADMIN_TOKEN || '' }}
+        run: |
+          set -eux
+          RESP=$(curl -sS -X POST -H "Content-Type: application/json" -d "{\"role_id\": \"$VAULT_ROLE_ID\", \"secret_id\": \"$SECRET_ID\"}" "$VAULT_ADDR/v1/auth/approle/login")
+          TOKEN=$(echo "$RESP" | jq -r '.auth.client_token')
+          echo "Vault token acquired"
+          RESP2=$(curl -sS -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/kv/data/master_key")
+          echo "$RESP2" | jq .
+          KEY=$(echo "$RESP2" | jq -r '.data.data.key // empty') || true
+          if [ -n "$KEY_ADMIN_TOKEN" ] && [ -n "$KEY" ]; then
+            printf '%s' "$KEY_ADMIN_TOKEN" | gh auth login --with-token
+            gh secret set MASTER_KEY --body "$KEY" --repo "${{ github.repository }}"
+            echo "MASTER_KEY written to repository secrets (E2E run)."
+          else
+            echo "KEY_ADMIN_TOKEN not provided or KEY empty; skipping writing repository secret."
+          fi
+
+      - name: Cleanup docker compose
+        if: always()
+        run: |
+          docker compose -f vault/docker-compose.yml down --volumes --remove-orphans
+
+*** End Patch
