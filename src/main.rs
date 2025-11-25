@@ -5,8 +5,10 @@ extern crate tree_sitter_python;
 extern crate tree_sitter_go;
 mod walker;
 mod walker_go;
+mod walker_move;
 use crate::walker::python_to_rust;
 use crate::walker_go::go_to_ueg;
+use crate::walker_move::move_to_rust;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -92,6 +94,16 @@ fn main() {
                     print!("{}", ueg_intermediate);
                 }
                 _ => eprintln!("Unsupported target for Go: {}", args.to),
+            }
+        }
+        "move" => {
+            match args.to.as_str() {
+                "rust" => {
+                    // Move → Rust (regex-based for now, tree-sitter-move not yet available)
+                    let rust_code = move_to_rust(&code);
+                    print!("{}", rust_code);
+                }
+                _ => eprintln!("Unsupported target for Move: {}", args.to),
             }
         }
         "rust" => {
