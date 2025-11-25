@@ -8,8 +8,17 @@ on:
         required: false
   workflow_call:
     # Enable as reusable workflow for gated CI patterns
+    # All secrets are optional to support both local and production environments
     secrets:
       NGROK_AUTHTOKEN:
+        required: false
+      CLIENT_CERT_BASE64:
+        required: false
+      CLIENT_KEY_BASE64:
+        required: false
+      VAULT_ROLE_ID:
+        required: false
+      KEY_ADMIN_TOKEN:
         required: false
 
 jobs:

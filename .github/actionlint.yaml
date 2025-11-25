@@ -1,0 +1,15 @@
+# actionlint configuration for un1c0 workflows
+# https://github.com/rhysd/actionlint
+
+self-hosted-runner:
+  # No self-hosted runners currently
+  labels: []
+
+config-variables:
+  # Allow checking for repository secrets even though they may not exist
+  # in forked PRs (this is expected security behavior)
+  []
+
+# Suppress "Context access might be invalid" warnings for secrets
+# These warnings are informational - secrets won't be available in forked PRs
+# which is correct GitHub security behavior, not an error to fix
