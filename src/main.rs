@@ -59,9 +59,8 @@ fn entropy_fingerprint(source: &str) -> (f64, bool) {
     let ratio = if min_possible > 0.0 { actual / min_possible } else { 1.0 };
     // Normal code has ratio < 1.0 (because some chars are more frequent)
     // Obfuscated code tries to maximize entropy, approaching ratio = 1.0
-    // But we want to reject if ratio > 1.05, which shouldn't happen unless malicious
-    // For now, disable the hard gate to allow normal code through
-    let is_malicious = false;  // TODO: Re-enable after fixing threshold
+    // PRODUCTION THRESHOLD: Reject if entropy exceeds 92% of theoretical maximum
+    let is_malicious = ratio > 0.92;
 
     (ratio, is_malicious)
 }
@@ -97,12 +96,10 @@ fn main() {
                     let tree = parser.parse(&code, None).expect("Parse failed");
                     let root = tree.root_node();
                     
-                    // Go → UEG (intermediate representation)
-                    let ueg_intermediate = go_to_ueg(&root, code.as_bytes());
-                    
-                    // For now, output the UEG representation
-                    // TODO: Call Python ueg.zig.ueg_to_zig() for final lowering
-                    print!("{}", ueg_intermediate);
+                    // Go → Zig via tree-sitter-zig walker
+                    use crate::walker_zig::go_to_zig;
+                    let zig_code = go_to_zig(&root, code.as_bytes());
+                    print!("{}", zig_code);
                 }
                 _ => eprintln!("Unsupported target for Go: {}", args.to),
             }

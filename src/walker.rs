@@ -46,7 +46,8 @@ pub fn lower_to_rust(ueg: &Ueg) -> String {
     out
 }
 
-#[allow(dead_code)]
+/// Shannon entropy fingerprint for obfuscation detection
+/// Returns normalized entropy (0.0-1.0), higher = more uniform character distribution
 pub fn entropy_fingerprint(source: &str) -> f64 {
     let mut freqs: HashMap<char, usize> = HashMap::new();
     let chars: Vec<char> = source.chars().collect();
@@ -66,14 +67,14 @@ pub fn entropy_fingerprint(source: &str) -> f64 {
 }
 
 pub fn python_to_rust(_root: &Node, source: &[u8]) -> String {
-    // Reuse `python_to_ueg` so the builder is exercised and not unused.
-    let _src = String::from_utf8_lossy(source).to_string();
-    // Entropy gate disabled for v0.2.0 - will be re-enabled with correct threshold
-    // let f = entropy_fingerprint(&src);
-    // let baseline = compute_minimal_baseline().unwrap_or(0.25_f64);
-    // if f > 1.05 * baseline {
-    //     return format!("// input rejected: entropy {:.6} > {:.6}", f, 1.05 * baseline);
-    // }
+    let src = String::from_utf8_lossy(source).to_string();
+    
+    // PRODUCTION: Entropy gate active - reject obfuscated code
+    let f = entropy_fingerprint(&src);
+    let _baseline = compute_minimal_baseline().unwrap_or(0.65_f64); // normal code ~0.65-0.75
+    if f > 0.92 { // approaching max entropy (obfuscation)
+        return format!("// UN1C⓪ REJECT: entropy {:.6} > 0.92 threshold (obfuscation detected)", f);
+    }
 
     let ueg = python_to_ueg(_root, source);
     if !ueg.validate() { return "// invalid UEG generated".into(); }
@@ -175,8 +176,7 @@ pub fn python_to_ueg(_root: &Node, source: &[u8]) -> Ueg {
 
 /// Compute a minimal baseline by scanning `examples/*.py` and returning the
 /// smallest entropy observed. Returns `None` on IO errors or if no examples.
-#[allow(dead_code)]
-fn compute_minimal_baseline() -> Option<f64> {
+pub fn compute_minimal_baseline() -> Option<f64> {
     use std::fs;
     use std::path::Path;
     let examples_dir = Path::new("examples");
