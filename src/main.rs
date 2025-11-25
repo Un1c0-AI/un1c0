@@ -8,11 +8,13 @@ mod walker_go;
 mod walker_move;
 mod walker_ts;
 mod walker_swift;
+mod walker_zig;
 use crate::walker::python_to_rust;
 use crate::walker_go::go_to_ueg;
 use crate::walker_move::move_to_rust;
 use crate::walker_ts::typescript_to_swift;
 use crate::walker_swift::swift_to_rust_regex;
+use crate::walker_zig::zig_to_rust;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -134,6 +136,16 @@ fn main() {
                     print!("{}", rust_code);
                 }
                 _ => eprintln!("Unsupported target for Swift: {}", args.to),
+            }
+        }
+        "zig" => {
+            match args.to.as_str() {
+                "rust" => {
+                    // Zig → Rust (AST-based with tree-sitter-zig)
+                    let rust_code = zig_to_rust(&code);
+                    print!("{}", rust_code);
+                }
+                _ => eprintln!("Unsupported target for Zig: {}", args.to),
             }
         }
         "rust" => {
