@@ -2,8 +2,11 @@ use clap::Parser;
 use std::fs;
 use tree_sitter::Parser as TsParser;
 extern crate tree_sitter_python;
+extern crate tree_sitter_go;
 mod walker;
+mod walker_go;
 use crate::walker::python_to_rust;
+use crate::walker_go::go_to_ueg;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -71,6 +74,25 @@ fn main() {
             let root = tree.root_node();
             let rust_code = python_to_rust(&root, code.as_bytes());
             print!("{}", rust_code);
+        }
+        "go" => {
+            match args.to.as_str() {
+                "zig" => {
+                    let mut parser = TsParser::new();
+                    let language = tree_sitter_go::LANGUAGE;
+                    parser.set_language(&language.into()).expect("Failed to set language");
+                    let tree = parser.parse(&code, None).expect("Parse failed");
+                    let root = tree.root_node();
+                    
+                    // Go → UEG (intermediate representation)
+                    let ueg_intermediate = go_to_ueg(&root, code.as_bytes());
+                    
+                    // For now, output the UEG representation
+                    // TODO: Call Python ueg.zig.ueg_to_zig() for final lowering
+                    print!("{}", ueg_intermediate);
+                }
+                _ => eprintln!("Unsupported target for Go: {}", args.to),
+            }
         }
         "rust" => {
             // Stub for Rust → Python (round-trip later)
