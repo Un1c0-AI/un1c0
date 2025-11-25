@@ -15,7 +15,8 @@ on:
 permissions:
   contents: write
   actions: write
-  secrets: write
+  # Note: secrets permission only supports 'read', not 'write'
+  # Secrets are managed via gh CLI or GitHub API with PATs
 
 jobs:
   check-cert-expiry:

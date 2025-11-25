@@ -25,7 +25,7 @@ jobs:
             exit 1
           fi
       - name: Setup Rust
-        uses: dtolnay/setup-rust@v1
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
       - name: Setup Go

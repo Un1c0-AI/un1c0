@@ -6,6 +6,11 @@ on:
       ngrok_authtoken:
         description: 'ngrok authtoken (set as secret NGROK_AUTHTOKEN instead)'
         required: false
+  workflow_call:
+    # Enable as reusable workflow for gated CI patterns
+    secrets:
+      NGROK_AUTHTOKEN:
+        required: false
 
 jobs:
   e2e:
