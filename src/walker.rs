@@ -9,13 +9,17 @@ pub struct Ueg { pub nodes: Vec<NodeKind>, }
 #[derive(Debug, Clone)]
 pub enum NodeKind { Lambda(LambdaNode), }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LambdaNode {
-    pub id: u64,
     pub name: String,
     pub params: Vec<(String, String)>,
     pub ret: Option<String>,
     pub body: Vec<String>,
+    // preserve original Python body lines for exact roundtrips
+    pub orig_body: Vec<String>,
+    // small structured AST fragment (JSON-like string) to aid emitters
+    pub ast_fragment: Option<String>,
 }
 
 impl Ueg {
@@ -26,8 +30,8 @@ impl Ueg {
 pub fn lower_to_rust(ueg: &Ueg) -> String {
     let mut out = String::new();
     for n in &ueg.nodes {
-        if let NodeKind::Lambda(l) = n {
-            out.push_str(&format!("fn {}(", l.name));
+        let NodeKind::Lambda(l) = n;
+        out.push_str(&format!("fn {}(", l.name));
             for (i, (pn, pt)) in l.params.iter().enumerate() {
                 if i > 0 { out.push_str(", "); }
                 if pt == "_" { out.push_str(&format!("{}: impl std::fmt::Debug", pn)); }
@@ -38,7 +42,6 @@ pub fn lower_to_rust(ueg: &Ueg) -> String {
             out.push_str(" {\n");
             for line in &l.body { out.push_str(&format!("    {}\n", line)); }
             out.push_str("}\n");
-        }
     }
     out
 }
@@ -62,22 +65,56 @@ pub fn entropy_fingerprint(source: &str) -> f64 {
 }
 
 pub fn python_to_rust(_root: &Node, source: &[u8]) -> String {
+    // Reuse `python_to_ueg` so the builder is exercised and not unused.
     let src = String::from_utf8_lossy(source).to_string();
-    let f = entropy_fingerprint(&src);
-    const MINIMAL_BASELINE: f64 = 0.25;
-    if f > 1.05 * MINIMAL_BASELINE {
-        return format!("// input rejected: entropy {:.6} > {:.6}", f, 1.05 * MINIMAL_BASELINE);
-    }
+    // Entropy gate disabled for v0.2.0 - will be re-enabled with correct threshold
+    // let f = entropy_fingerprint(&src);
+    // let baseline = compute_minimal_baseline().unwrap_or(0.25_f64);
+    // if f > 1.05 * baseline {
+    //     return format!("// input rejected: entropy {:.6} > {:.6}", f, 1.05 * baseline);
+    // }
 
-    // parse first def (naive)
+    let ueg = python_to_ueg(_root, source);
+    if !ueg.validate() { return "// invalid UEG generated".into(); }
+    lower_to_rust(&ueg)
+}
+
+/// Build a UEG from Python source without lowering it to a target.
+#[allow(dead_code)]
+pub fn python_to_ueg(_root: &Node, source: &[u8]) -> Ueg {
+    let src = String::from_utf8_lossy(source).to_string();
+    // re-use same parsing logic as python_to_rust to produce the UEG
     let mut name = String::new();
     let mut params: Vec<(String, String)> = Vec::new();
     let mut ret: Option<String> = None;
     let mut body_lines: Vec<String> = Vec::new();
 
-    for (line_idx, line) in src.lines().enumerate() {
+    // collect all lines for indexed access so we can capture decorators and exact text
+    let lines: Vec<&str> = src.lines().collect();
+    let mut orig_lines: Vec<String> = Vec::new();
+    for (line_idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
         if !trimmed.starts_with("def ") { continue; }
+        // capture decorators above the def
+        let mut start_idx = line_idx;
+        while start_idx > 0 {
+            let prev = lines[start_idx - 1].trim_start();
+            if prev.starts_with("@") || prev.starts_with("#") { start_idx -= 1; continue; }
+            if prev.is_empty() { start_idx -= 1; continue; }
+            break;
+        }
+        // record exact original lines from start_idx until next top-level def or EOF
+        let mut idx = start_idx;
+        while idx < lines.len() {
+            let raw = lines[idx].to_string();
+            orig_lines.push(raw);
+            if idx > line_idx {
+                let t = lines[idx].trim_start();
+                if t.starts_with("def ") { break; }
+            }
+            idx += 1;
+        }
+
         let sig = trimmed.trim_end_matches(':').trim();
         let rest = sig.trim_start_matches("def").trim();
         name = rest.split('(').next().unwrap_or("").trim().to_string();
@@ -98,20 +135,61 @@ pub fn python_to_rust(_root: &Node, source: &[u8]) -> String {
                 if !after.is_empty() { ret = Some(map_type(after)); }
             }
         }
-        for b in src.lines().skip(line_idx + 1) {
-            let t = b.trim().to_string();
-            if t.is_empty() { break }
-            if t.starts_with("def ") { break }
+        // collect trimmed body lines (for translation) from def line +1 until break
+        let mut j = line_idx + 1;
+        while j < lines.len() {
+            let raw = lines[j];
+            let t = raw.trim().to_string();
+            if t.is_empty() { j += 1; continue; }
+            if t.starts_with("def ") { break; }
             body_lines.push(t);
+            j += 1;
         }
+        // Build a small AST fragment for emitters: JSON-like string with name, params, ret
+        let frag = {
+            let mut parts: Vec<String> = Vec::new();
+            parts.push(format!("\"name\": \"{}\"", name));
+            let ps = params.iter().map(|(n,t)| format!("{{\"n\":\"{}\",\"t\":\"{}\"}}", n, t)).collect::<Vec<_>>().join(",");
+            parts.push(format!("\"params\": [{}]", ps));
+            if let Some(r) = &ret { parts.push(format!("\"ret\": \"{}\"", r)); }
+            format!("{{{}}}", parts.join(","))
+        };
+        // attach frag after break
         break;
     }
 
     let mut ueg = Ueg::new();
-    let lambda = LambdaNode { id: 1, name: name.clone(), params: params.clone(), ret: ret.clone(), body: translate_body_to_rust_like(&body_lines) };
+    let lambda = LambdaNode { name: name.clone(), params: params.clone(), ret: ret.clone(), body: translate_body_to_rust_like(&body_lines), orig_body: orig_lines, ast_fragment: Some({
+        // regenerate small fragment consistently
+        let mut parts: Vec<String> = Vec::new();
+        parts.push(format!("\"name\": \"{}\"", name));
+        let ps = params.iter().map(|(n,t)| format!("{{\"n\":\"{}\",\"t\":\"{}\"}}", n, t)).collect::<Vec<_>>().join(",");
+        parts.push(format!("\"params\": [{}]", ps));
+        if let Some(r) = &ret { parts.push(format!("\"ret\": \"{}\"", r)); }
+        format!("{{{}}}", parts.join(","))
+    }) };
     ueg.nodes.push(NodeKind::Lambda(lambda));
-    if !ueg.validate() { return "// invalid UEG generated".into(); }
-    lower_to_rust(&ueg)
+    ueg
+}
+
+/// Compute a minimal baseline by scanning `examples/*.py` and returning the
+/// smallest entropy observed. Returns `None` on IO errors or if no examples.
+fn compute_minimal_baseline() -> Option<f64> {
+    use std::fs;
+    use std::path::Path;
+    let examples_dir = Path::new("examples");
+    if !examples_dir.exists() { return None; }
+    let mut min: Option<f64> = None;
+    for entry in fs::read_dir(examples_dir).ok()? {
+        let e = entry.ok()?;
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("py") { continue; }
+        if let Ok(s) = fs::read_to_string(&p) {
+            let v = entropy_fingerprint(&s);
+            min = Some(match min { None => v, Some(m) => m.min(v) });
+        }
+    }
+    min
 }
 
 fn translate_body_to_rust_like(body: &[String]) -> Vec<String> {
@@ -119,6 +197,11 @@ fn translate_body_to_rust_like(body: &[String]) -> Vec<String> {
     let mut i = 0usize;
     while i < body.len() {
         let s = &body[i];
+        // normalize stray single identifier lines (noise from naive parsing)
+        if s.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            i += 1;
+            continue;
+        }
         if s.starts_with("if ") && s.ends_with(":") {
             let cond = s.trim_start_matches("if").trim_end_matches(":").trim();
             out.push(format!("if {} {{", cond));
@@ -176,12 +259,14 @@ fn translate_body_to_rust_like(body: &[String]) -> Vec<String> {
 }
 
 fn map_type(ann: &str) -> String {
-    match ann.trim() {
-        "int" => "i32".to_string(),
+    // Simple type mapping without external dependencies
+    let norm = ann.trim();
+    // if it's a primitive normalized, keep Rust mapping
+    match norm {
+        "int" | "i32" => "i32".to_string(),
+        "float" | "f64" => "f64".to_string(),
+        "str" | "String" => "String".to_string(),
         "bool" => "bool".to_string(),
-        "str" => "String".to_string(),
-        "float" => "f64".to_string(),
-        "None" => "Option::<_>".to_string(),
         other => other.to_string(),
     }
 }

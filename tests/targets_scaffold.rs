@@ -4,7 +4,7 @@ extern crate tree_sitter_python;
 
 #[test]
 fn go_zig_scaffold_produces_output() {
-    let code = fs::read_to_string("examples/fib.py").expect("read example");
+    let code = fs::read_to_string("examples/python/fib.py").expect("read example");
     let mut parser = TsParser::new();
     let language = tree_sitter_python::LANGUAGE;
     parser.set_language(&language.into()).unwrap();

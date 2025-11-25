@@ -2,7 +2,7 @@
 fn fib_transpiles_perfectly() {
     let expected = include_str!("./gold/fib.rs");
     let output = std::process::Command::new("cargo")
-        .args(["run", "--release", "--", "python", "rust", "examples/fib.py"]) 
+        .args(["run", "--release", "--", "python", "rust", "examples/python/fib.py"]) 
         .output()
         .unwrap();
     let generated = String::from_utf8_lossy(&output.stdout);
